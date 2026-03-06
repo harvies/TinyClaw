@@ -11,6 +11,7 @@ import io.leavesfly.tinyclaw.logger.TinyClawLogger;
 import io.leavesfly.tinyclaw.providers.HTTPProvider;
 import io.leavesfly.tinyclaw.providers.LLMProvider;
 import io.leavesfly.tinyclaw.security.SecurityGuard;
+import io.leavesfly.tinyclaw.skills.SkillsLoader;
 import io.leavesfly.tinyclaw.tools.*;
 
 import java.io.File;
@@ -246,8 +247,8 @@ public abstract class CliCommand {
         SubagentManager subagentManager = new SubagentManager(provider, workspace, bus, agentLoop.getToolRegistry());
         agentLoop.registerTool(new SpawnTool(subagentManager));
         
-        // 技能管理工具
-        agentLoop.registerTool(new SkillsTool(workspace));
+        // 技能管理工具（共享 SkillsLoader 实例，确保与 ContextBuilder 的技能视图一致）
+        agentLoop.registerTool(new SkillsTool(workspace, agentLoop.getSkillsLoader()));
         
         // 社交网络工具
         if (config.getSocialNetwork() != null && config.getSocialNetwork().isEnabled()) {

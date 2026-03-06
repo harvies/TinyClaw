@@ -424,6 +424,18 @@ public class ContextBuilder {
     }
     
     /**
+     * 获取技能加载器实例。
+     * 
+     * 用于与其他组件（如 SkillsTool）共享同一个 SkillsLoader 实例，
+     * 确保技能列表视图的一致性。
+     * 
+     * @return 技能加载器实例
+     */
+    public SkillsLoader getSkillsLoader() {
+        return skillsLoader;
+    }
+    
+    /**
      * 获取已加载技能的信息。
      * 
      * 返回当前已安装技能的统计信息，包括：

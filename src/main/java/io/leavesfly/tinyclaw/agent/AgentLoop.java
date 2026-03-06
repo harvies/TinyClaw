@@ -9,6 +9,7 @@ import io.leavesfly.tinyclaw.mcp.MCPManager;
 import io.leavesfly.tinyclaw.providers.LLMProvider;
 import io.leavesfly.tinyclaw.providers.Message;
 import io.leavesfly.tinyclaw.session.SessionManager;
+import io.leavesfly.tinyclaw.skills.SkillsLoader;
 import io.leavesfly.tinyclaw.tools.Tool;
 import io.leavesfly.tinyclaw.tools.ToolRegistry;
 import io.leavesfly.tinyclaw.util.StringUtils;
@@ -153,6 +154,11 @@ public class AgentLoop {
     /** 获取工具注册表，供外部组件（如 SubagentManager）使用 */
     public ToolRegistry getToolRegistry() {
         return tools;
+    }
+    
+    /** 获取技能加载器实例，供外部组件（如 SkillsTool）共享以保持技能列表一致性 */
+    public SkillsLoader getSkillsLoader() {
+        return contextBuilder.getSkillsLoader();
     }
 
     // ==================== 公开入口（CLI / 外部调用） ====================

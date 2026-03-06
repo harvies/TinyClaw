@@ -317,6 +317,84 @@ public class SkillsLoader {
     }
     
     /**
+     * 将 builtin 技能从 classpath 解压到文件系统缓存目录。
+     * 
+     * 当 builtin 技能被 invoke 时，需要一个真实的文件系统路径来执行脚本。
+     * 此方法将 classpath 中的技能资源复制到 workspace/.builtin-cache/{skillName}/ 目录下，
+     * 返回该目录的绝对路径。如果缓存已存在且 SKILL.md 文件完好，则直接返回缓存路径。
+     * 
+     * @param skillName 技能名称
+     * @return 解压后的文件系统路径，失败时返回 null
+     */
+    public String extractBuiltinSkillToFileSystem(String skillName) {
+        if (!BUILTIN_SKILL_NAMES.contains(skillName)) {
+            return null;
+        }
+        
+        Path cacheDir = Paths.get(workspace, ".builtin-cache", skillName);
+        Path cachedSkillFile = cacheDir.resolve("SKILL.md");
+        
+        // 如果缓存已存在，直接返回
+        if (Files.exists(cachedSkillFile)) {
+            return cacheDir.toAbsolutePath().toString();
+        }
+        
+        // 从 classpath 解压到缓存目录
+        String resourceBase = BUILTIN_SKILLS_PATH + skillName + "/";
+        try {
+            Files.createDirectories(cacheDir);
+            
+            // 复制 SKILL.md
+            String skillContent = loadBuiltinSkillContent(skillName);
+            if (skillContent == null) {
+                return null;
+            }
+            Files.writeString(cachedSkillFile, skillContent);
+            
+            // 尝试复制技能目录下的其他资源（scripts/、references/、assets/）
+            for (String subdir : new String[]{"scripts", "references", "assets"}) {
+                extractBuiltinSubdirectory(resourceBase + subdir + "/", cacheDir.resolve(subdir));
+            }
+            
+            return cacheDir.toAbsolutePath().toString();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+    
+    /**
+     * 尝试从 classpath 解压子目录资源。
+     * 
+     * @param resourcePath classpath 中的资源路径前缀
+     * @param targetDir 目标文件系统目录
+     */
+    private void extractBuiltinSubdirectory(String resourcePath, Path targetDir) {
+        // classpath 资源无法直接列举目录内容，这里通过尝试加载已知文件来处理
+        // 对于更复杂的场景，可以在 SKILL.md 中声明附带的文件列表
+        try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
+            // 如果子目录资源存在（某些类加载器支持目录流），尝试读取
+            if (is != null) {
+                Files.createDirectories(targetDir);
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                    String fileName;
+                    while ((fileName = reader.readLine()) != null) {
+                        fileName = fileName.trim();
+                        if (fileName.isEmpty()) continue;
+                        try (InputStream fileIs = getClass().getClassLoader()
+                                .getResourceAsStream(resourcePath + fileName)) {
+                            if (fileIs != null) {
+                                Files.copy(fileIs, targetDir.resolve(fileName));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            // 子目录不存在或无法读取，忽略
+        }
+    }
+    
+    /**
      * 转义 XML 特殊字符
      */
     private String escapeXML(String s) {

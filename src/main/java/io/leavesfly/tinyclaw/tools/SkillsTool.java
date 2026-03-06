@@ -65,6 +65,21 @@ public class SkillsTool implements Tool {
         this.skillsInstaller = new SkillsInstaller(workspace);
     }
 
+    /**
+     * 创建共享 SkillsLoader 实例的技能管理工具。
+     * 
+     * 通过共享 SkillsLoader 实例，确保 SkillsTool 和 ContextBuilder 
+     * 对技能列表的视图保持一致，避免 create/edit 后不同步的问题。
+     *
+     * @param workspace    工作空间路径
+     * @param skillsLoader 共享的技能加载器实例
+     */
+    public SkillsTool(String workspace, SkillsLoader skillsLoader) {
+        this.workspace = workspace;
+        this.skillsLoader = skillsLoader;
+        this.skillsInstaller = new SkillsInstaller(workspace);
+    }
+
     @Override
     public String name() {
         return "skills";
@@ -244,7 +259,9 @@ public class SkillsTool implements Tool {
     /**
      * 查找技能所在位置。
      * 
-     * 按优先级顺序查找：workspace > global > builtin
+     * 按优先级顺序查找：workspace > global > builtin。
+     * 对于 builtin 技能，会自动将其从 classpath 解压到文件系统缓存目录，
+     * 确保返回的 base-path 在 JAR 环境下也是有效的文件系统路径。
      * 
      * @param skillName 技能名称
      * @return 技能位置信息，未找到返回 null
@@ -262,6 +279,18 @@ public class SkillsTool implements Tool {
         // 遍历已加载的技能列表查找
         for (SkillInfo skill : skillsLoader.listSkills()) {
             if (skill.getName().equals(skillName)) {
+                // builtin 技能的路径是 classpath: 前缀，JAR 环境下不是有效的文件系统路径
+                // 需要解压到文件系统缓存目录
+                if ("builtin".equals(skill.getSource())) {
+                    String extractedPath = skillsLoader.extractBuiltinSkillToFileSystem(skillName);
+                    if (extractedPath != null) {
+                        return new SkillLocation(extractedPath, "builtin");
+                    }
+                    // 解压失败时回退，返回提示信息
+                    logger.warn("无法解压 builtin 技能到文件系统", Map.of("skill", skillName));
+                    return new SkillLocation(skill.getPath(), skill.getSource());
+                }
+                
                 Path skillPath = Paths.get(skill.getPath()).getParent();
                 return new SkillLocation(
                         skillPath.toAbsolutePath().toString(),
