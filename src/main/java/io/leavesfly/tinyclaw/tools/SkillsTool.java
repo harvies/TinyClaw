@@ -1,9 +1,11 @@
 package io.leavesfly.tinyclaw.tools;
 
+import io.leavesfly.tinyclaw.config.ToolsConfig;
 import io.leavesfly.tinyclaw.logger.TinyClawLogger;
 import io.leavesfly.tinyclaw.skills.SkillInfo;
 import io.leavesfly.tinyclaw.skills.SkillsInstaller;
 import io.leavesfly.tinyclaw.skills.SkillsLoader;
+import io.leavesfly.tinyclaw.skills.SkillsSearcher;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -37,19 +39,18 @@ public class SkillsTool implements Tool {
 
     private static final TinyClawLogger logger = TinyClawLogger.getLogger("skills");
 
-    private final SkillsLoader skillsLoader;       // 技能加载器
-    private final SkillsInstaller skillsInstaller; // 技能安装器
+    private final SkillsLoader skillsLoader;
+    private final SkillsInstaller skillsInstaller;
+    private final SkillsSearcher skillsSearcher;
     private final String workspace;                // 工作空间路径
 
     /**
-     * 创建技能管理工具。
+     * 创建技能管理工具（使用默认配置）。
      *
      * @param workspace 工作空间路径
      */
     public SkillsTool(String workspace) {
-        this.workspace = workspace;
-        this.skillsLoader = new SkillsLoader(workspace, null, null);
-        this.skillsInstaller = new SkillsInstaller(workspace);
+        this(workspace, new SkillsLoader(workspace, null, null), null);
     }
 
     /**
@@ -60,9 +61,7 @@ public class SkillsTool implements Tool {
      * @param builtinSkills 内置技能目录路径
      */
     public SkillsTool(String workspace, String globalSkills, String builtinSkills) {
-        this.workspace = workspace;
-        this.skillsLoader = new SkillsLoader(workspace, globalSkills, builtinSkills);
-        this.skillsInstaller = new SkillsInstaller(workspace);
+        this(workspace, new SkillsLoader(workspace, globalSkills, builtinSkills), null);
     }
 
     /**
@@ -75,9 +74,23 @@ public class SkillsTool implements Tool {
      * @param skillsLoader 共享的技能加载器实例
      */
     public SkillsTool(String workspace, SkillsLoader skillsLoader) {
+        this(workspace, skillsLoader, null);
+    }
+
+    /**
+     * 创建带完整配置的技能管理工具（主构造函数）。
+     * 
+     * @param workspace    工作空间路径
+     * @param skillsLoader 技能加载器实例
+     * @param skillsConfig 技能工具配置（为 null 时使用默认配置）
+     */
+    public SkillsTool(String workspace, SkillsLoader skillsLoader, ToolsConfig.SkillsToolConfig skillsConfig) {
         this.workspace = workspace;
         this.skillsLoader = skillsLoader;
         this.skillsInstaller = new SkillsInstaller(workspace);
+        this.skillsSearcher = (skillsConfig != null)
+                ? SkillsSearcher.fromConfig(skillsConfig)
+                : new SkillsSearcher();
     }
 
     @Override
@@ -87,7 +100,8 @@ public class SkillsTool implements Tool {
 
     @Override
     public String description() {
-        return "管理和执行技能：列出、查看、调用（invoke）、从 GitHub 安装、创建新技能、编辑现有技能或删除技能。"
+        return "管理和执行技能：列出、查看、调用（invoke）、搜索 GitHub 上的技能、搜索并自动安装、从 GitHub 安装、创建新技能、编辑现有技能或删除技能。"
+                + "使用 search 操作搜索 GitHub 上的社区技能，使用 search_install 一键搜索并安装最匹配的技能。"
                 + "使用 invoke 操作来调用带脚本的技能，会返回技能目录路径以便执行脚本。";
     }
 
@@ -105,17 +119,24 @@ public class SkillsTool implements Tool {
                         + "'list' - 列出所有已安装的技能; "
                         + "'show' - 显示技能的完整内容; "
                         + "'invoke' - 调用技能并返回基础路径（用于执行带脚本的技能）; "
+                        + "'search' - 在 GitHub 上搜索可用的技能仓库（需要 query 参数）; "
+                        + "'search_install' - 搜索 GitHub 并自动安装最匹配的技能（需要 query 参数）; "
                         + "'install' - 从 GitHub 安装技能（例如 'owner/repo' 或 'owner/repo/skill-name'）; "
                         + "'create' - 创建新技能，指定名称和内容; "
                         + "'edit' - 更新现有技能的内容; "
                         + "'remove' - 按名称删除技能");
-        actionParam.put("enum", new String[]{"list", "show", "invoke", "install", "create", "edit", "remove"});
+        actionParam.put("enum", new String[]{"list", "show", "invoke", "search", "search_install", "install", "create", "edit", "remove"});
         properties.put("action", actionParam);
 
         Map<String, Object> nameParam = new HashMap<>();
         nameParam.put("type", "string");
         nameParam.put("description", "技能名称（show、create、edit、remove 操作必需）");
         properties.put("name", nameParam);
+
+        Map<String, Object> queryParam = new HashMap<>();
+        queryParam.put("type", "string");
+        queryParam.put("description", "搜索关键词，用于 search 和 search_install 操作（描述你需要的技能功能，例如 'pptx generation' 或 'weather forecast'）");
+        properties.put("query", queryParam);
 
         Map<String, Object> repoParam = new HashMap<>();
         repoParam.put("type", "string");
@@ -151,12 +172,14 @@ public class SkillsTool implements Tool {
             case "list" -> executeList();
             case "show" -> executeShow(args);
             case "invoke" -> executeInvoke(args);
+            case "search" -> executeSearch(args);
+            case "search_install" -> executeSearchInstall(args);
             case "install" -> executeInstall(args);
             case "create" -> executeCreate(args);
             case "edit" -> executeEdit(args);
             case "remove" -> executeRemove(args);
             default -> throw new IllegalArgumentException("未知操作: " + action
-                    + "。有效操作：list、show、invoke、install、create、edit、remove");
+                    + "。有效操作：list、show、invoke、search、search_install、install、create、edit、remove");
         };
     }
 
@@ -313,6 +336,173 @@ public class SkillsTool implements Tool {
             this.basePath = basePath;
             this.source = source;
         }
+    }
+
+    /**
+     * 在 GitHub 上搜索可用的技能仓库。
+     * 
+     * 通过 GitHub Search API 搜索包含 SKILL.md 的仓库，
+     * 支持按关键词搜索和按 topic 过滤。返回搜索结果列表，
+     * 包含仓库名称、描述、星标数和安装命令。
+     * 
+     * @param args 参数映射，必须包含 query 字段
+     * @return 格式化的搜索结果
+     */
+    private String executeSearch(Map<String, Object> args) {
+        String query = (String) args.get("query");
+        if (query == null || query.isEmpty()) {
+            throw new IllegalArgumentException("对于 'search' 操作，query 参数是必需的（描述你需要的技能功能）");
+        }
+
+        logger.info("Searching skill registries", Map.of("query", query));
+
+        List<SkillsSearcher.SkillSearchResult> results = skillsSearcher.search(query, 5);
+
+        StringBuilder response = new StringBuilder();
+
+        // 显示搜索源信息
+        response.append("🔍 搜索源: ");
+        List<String> sourceNames = skillsSearcher.getRegistries().stream()
+                .filter(r -> r.isEnabled())
+                .map(r -> r.getName())
+                .toList();
+        response.append(String.join(", ", sourceNames));
+        if (skillsSearcher.isAllowGlobalSearch()) {
+            response.append(" + GitHub 全网");
+        }
+        response.append("\n\n");
+
+        response.append(SkillsSearcher.formatResults(results, query));
+        return response.toString();
+    }
+
+    /**
+     * 搜索 GitHub 并自动安装最匹配的技能。
+     * 
+     * 这是自动搜索安装的核心方法，执行流程：
+     * 1. 使用关键词在 GitHub 上搜索技能仓库
+     * 2. 从搜索结果中选择最匹配的仓库（优先选择已验证包含 SKILL.md 的）
+     * 3. 如果指定了 repo 参数，则从搜索结果中匹配该仓库
+     * 4. 自动调用 SkillsInstaller 安装选中的技能
+     * 
+     * @param args 参数映射，必须包含 query 字段，可选 repo 字段指定安装哪个搜索结果
+     * @return 搜索和安装结果信息
+     * @throws Exception 搜索或安装失败时抛出异常
+     */
+    private String executeSearchInstall(Map<String, Object> args) throws Exception {
+        String query = (String) args.get("query");
+        if (query == null || query.isEmpty()) {
+            throw new IllegalArgumentException("对于 'search_install' 操作，query 参数是必需的（描述你需要的技能功能）");
+        }
+
+        String targetRepo = (String) args.get("repo");
+
+        logger.info("Search and install skill", Map.of(
+                "query", query,
+                "target_repo", targetRepo != null ? targetRepo : "auto-select"
+        ));
+
+        // 搜索技能
+        List<SkillsSearcher.SkillSearchResult> results = skillsSearcher.search(query, 5);
+
+        if (results.isEmpty()) {
+            return "未找到与 '" + query + "' 相关的技能仓库。\n\n"
+                    + "建议：\n"
+                    + "- 尝试使用不同的关键词：`skills(action='search', query='...')`\n"
+                    + "- 自己创建一个技能：`skills(action='create', name='...', content='...')`";
+        }
+
+        // 选择要安装的仓库
+        SkillsSearcher.SkillSearchResult selectedResult = null;
+
+        if (targetRepo != null && !targetRepo.isEmpty()) {
+            // 用户指定了仓库，从搜索结果中匹配
+            for (SkillsSearcher.SkillSearchResult result : results) {
+                if (result.getFullName().equalsIgnoreCase(targetRepo)
+                        || result.getFullName().toLowerCase().contains(targetRepo.toLowerCase())) {
+                    selectedResult = result;
+                    break;
+                }
+            }
+            if (selectedResult == null) {
+                // 用户指定的仓库不在搜索结果中，直接尝试安装
+                logger.info("Direct install from specified repo", Map.of("repo", targetRepo));
+                String installResult = skillsInstaller.install(targetRepo);
+                return "🔍 搜索到 " + results.size() + " 个结果，但按你指定的仓库直接安装：\n\n"
+                        + installResult + "\n技能现已可用，将在下次上下文构建时加载。";
+            }
+        } else {
+            // 自动选择最佳结果：优先选择已验证包含 SKILL.md 的仓库
+            for (SkillsSearcher.SkillSearchResult result : results) {
+                if (result.isHasSkillFile()) {
+                    selectedResult = result;
+                    break;
+                }
+            }
+
+            // 如果没有已验证的，验证第一个结果是否包含 SKILL.md
+            if (selectedResult == null) {
+                SkillsSearcher.SkillSearchResult firstResult = results.get(0);
+                boolean hasSkillFile = skillsSearcher.verifySkillFile(
+                        firstResult.getFullName(), firstResult.getSkillSubdir());
+                if (hasSkillFile) {
+                    selectedResult = firstResult;
+                }
+            }
+
+            // 如果仍然没有找到包含 SKILL.md 的仓库，返回搜索结果让用户选择
+            if (selectedResult == null) {
+                return "搜索到 " + results.size() + " 个相关仓库，但未能自动确认哪个包含有效的 SKILL.md 文件。\n\n"
+                        + SkillsSearcher.formatResults(results, query) + "\n\n"
+                        + "请从上述结果中选择一个仓库，使用以下命令安装：\n"
+                        + "`skills(action='install', repo='owner/repo')`";
+            }
+        }
+
+        // 安装选中的技能
+        String installSpecifier = selectedResult.getInstallSpecifier();
+        logger.info("Auto-installing best match", Map.of(
+                "repo", selectedResult.getFullName(),
+                "install_specifier", installSpecifier,
+                "stars", selectedResult.getStars()
+        ));
+
+        StringBuilder response = new StringBuilder();
+        response.append("🔍 搜索到 ").append(results.size()).append(" 个与 '").append(query).append("' 相关的技能仓库。\n");
+        response.append("📦 自动选择最佳匹配: **").append(selectedResult.getFullName()).append("**");
+        if (selectedResult.getStars() > 0) {
+            response.append(" ⭐ ").append(selectedResult.getStars());
+        }
+        response.append("\n");
+        if (selectedResult.getDescription() != null && !selectedResult.getDescription().isEmpty()) {
+            response.append("   ").append(selectedResult.getDescription()).append("\n");
+        }
+        response.append("\n");
+
+        try {
+            String installResult = skillsInstaller.install(installSpecifier);
+            response.append(installResult).append("\n");
+            response.append("技能现已可用，将在下次上下文构建时加载。\n\n");
+            response.append("💡 使用 `skills(action='show', name='...")
+                    .append("')` 查看技能详情，或使用 `skills(action='invoke', name='...")
+                    .append("')` 调用技能。");
+        } catch (Exception installError) {
+            response.append("⚠️ 安装失败: ").append(installError.getMessage()).append("\n\n");
+            response.append("其他搜索结果：\n");
+            for (int i = 0; i < results.size(); i++) {
+                SkillsSearcher.SkillSearchResult result = results.get(i);
+                if (!result.getFullName().equals(selectedResult.getFullName())) {
+                    response.append("- **").append(result.getFullName()).append("**");
+                    if (result.getDescription() != null && !result.getDescription().isEmpty()) {
+                        response.append(" — ").append(result.getDescription());
+                    }
+                    response.append("\n  安装: `skills(action='install', repo='")
+                            .append(result.getInstallSpecifier()).append("')`\n");
+                }
+            }
+        }
+
+        return response.toString();
     }
 
     /**

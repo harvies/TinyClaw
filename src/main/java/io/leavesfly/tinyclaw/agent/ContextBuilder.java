@@ -211,8 +211,9 @@ public class ContextBuilder {
      */
     private void appendWhenToLearnSkills(StringBuilder sb) {
         sb.append("### 何时学习新技能\n\n");
-        sb.append("- 当你遇到现有技能无法覆盖的任务时，考虑**创建新技能**来处理它。\n");
+        sb.append("- 当你遇到现有技能无法覆盖的任务时，先**搜索 GitHub** 上是否有现成的技能可以安装。\n");
         sb.append("- 当用户提到社区技能或包含有用技能的 GitHub 仓库时，直接**安装它**。\n");
+        sb.append("- 如果搜索不到合适的技能，考虑**创建新技能**来处理它。\n");
         sb.append("- 当你发现自己重复执行类似的多步操作时，**将模式提取为可复用的技能**。\n");
         sb.append("- 当现有技能可以根据新经验改进时，**编辑它**使其更好。\n\n");
     }
@@ -228,10 +229,23 @@ public class ContextBuilder {
         sb.append("- `skills(action='list')` — 查看所有已安装技能\n");
         sb.append("- `skills(action='show', name='...')` — 查看技能的完整内容\n");
         sb.append("- `skills(action='invoke', name='...')` — **调用技能并获取其基础路径**（用于带脚本的技能）\n");
-        sb.append("- `skills(action='install', repo='owner/repo')` — 从 GitHub 安装技能\n");
+        sb.append("- `skills(action='search', query='...')` — **从可信技能市场搜索可用的技能**（按功能描述搜索）\n");
+        sb.append("- `skills(action='search_install', query='...')` — **搜索并自动安装最匹配的技能**（一键搜索+安装）\n");
+        sb.append("- `skills(action='install', repo='owner/repo')` — 从 GitHub 安装指定技能\n");
         sb.append("- `skills(action='create', name='...', content='...', skill_description='...')` — 根据经验创建新技能\n");
         sb.append("- `skills(action='edit', name='...', content='...')` — 改进现有技能\n");
         sb.append("- `skills(action='remove', name='...')` — 删除不再需要的技能\n\n");
+        sb.append("### 自动搜索安装技能\n\n");
+        sb.append("搜索功能默认从**可信技能市场**中搜索，确保安全性。内置市场源包括：\n");
+        sb.append("- TinyClaw Official（官方技能集合）\n");
+        sb.append("- TinyClaw Community（社区精选技能）\n");
+        sb.append("- Claude Code Skills（Claude Code 社区技能）\n");
+        sb.append("- Anthropic Skills（Anthropic 官方技能）\n\n");
+        sb.append("当你遇到无法处理的任务时，推荐使用以下流程：\n");
+        sb.append("1. 先用 `skills(action='search', query='描述需要的功能')` 从可信市场搜索技能\n");
+        sb.append("2. 如果找到合适的，用 `skills(action='search_install', query='...')` 一键安装\n");
+        sb.append("3. 安装后用 `skills(action='invoke', name='...')` 调用技能解决问题\n");
+        sb.append("4. 如果搜索不到，再考虑自己创建技能\n\n");
     }
     
     /**
