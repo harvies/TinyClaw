@@ -4,6 +4,7 @@ import io.leavesfly.tinyclaw.logger.TinyClawLogger;
 import io.leavesfly.tinyclaw.security.SecurityGuard;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Paths;
 import java.util.HashMap;
@@ -234,8 +235,8 @@ public class ExecTool implements Tool {
      * @param threadName 线程名称
      * @return 输出读取线程
      */
-    private Thread createOutputThread(java.io.InputStream inputStream, 
-                                     StringBuilder output, String threadName) {
+    private Thread createOutputThread(InputStream inputStream,
+                                      StringBuilder output, String threadName) {
         return new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
                 String line;
