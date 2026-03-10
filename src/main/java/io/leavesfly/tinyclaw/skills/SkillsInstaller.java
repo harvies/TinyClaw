@@ -230,40 +230,115 @@ public class SkillsInstaller {
      * 
      * 使用 git clone 命令将远程仓库克隆到指定目录。
      * 使用 --depth 1 参数进行浅克隆以节省时间和空间。
+     * 如果 HTTPS 方式因网络问题失败，自动回退到 SSH 方式重试。
      * 
      * @param repoUrl 仓库 URL
      * @param targetDir 目标目录
      * @throws Exception 克隆失败时抛出
      */
     private void cloneRepository(String repoUrl, String targetDir) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder(
-            "git", "clone", "--depth", "1", repoUrl, targetDir
-        );
-        pb.redirectErrorStream(true);
-        
-        Process process = pb.start();
-        
-        // 读取输出
-        StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-            }
+        String httpsError = executeGitClone(repoUrl, targetDir);
+
+        if (httpsError == null) {
+            return;
         }
-        
-        int exitCode = process.waitFor();
-        
-        if (exitCode != 0) {
-            String errorMsg = output.toString();
-            if (errorMsg.contains("not found") || errorMsg.contains("404")) {
-                throw new Exception("仓库不存在或无访问权限: " + repoUrl);
-            } else if (errorMsg.contains("Authentication failed")) {
-                throw new Exception("认证失败。请检查仓库访问权限。");
-            } else {
-                throw new Exception("克隆仓库失败: " + errorMsg);
+
+        // HTTPS 失败且是网络连接问题，尝试 SSH 方式
+        boolean isNetworkError = httpsError.contains("Failed to connect")
+                || httpsError.contains("Could not resolve host")
+                || httpsError.contains("Connection refused")
+                || httpsError.contains("Connection timed out")
+                || httpsError.contains("Couldn't connect to server");
+
+        String sshUrl = convertToSshUrl(repoUrl);
+        if (isNetworkError && sshUrl != null) {
+            logger.info("HTTPS clone failed, retrying with SSH", Map.of(
+                    "https_url", repoUrl,
+                    "ssh_url", sshUrl
+            ));
+
+            // 清理 HTTPS 失败留下的目录内容
+            deleteDirectory(new File(targetDir));
+            Files.createDirectories(Paths.get(targetDir));
+
+            String sshError = executeGitClone(sshUrl, targetDir);
+            if (sshError == null) {
+                return;
             }
+
+            // SSH 也失败，抛出包含两种方式错误信息的异常
+            throw new Exception("克隆仓库失败。\n"
+                    + "HTTPS (" + repoUrl + "): " + httpsError.trim() + "\n"
+                    + "SSH (" + sshUrl + "): " + sshError.trim() + "\n\n"
+                    + "请检查网络连接，或配置 git 代理：\n"
+                    + "  git config --global http.proxy http://代理地址:端口\n"
+                    + "  git config --global https.proxy http://代理地址:端口");
         }
+
+        // 非网络问题或无法转换为 SSH URL，直接报错
+        if (httpsError.contains("not found") || httpsError.contains("404")) {
+            throw new Exception("仓库不存在或无访问权限: " + repoUrl);
+        } else if (httpsError.contains("Authentication failed")) {
+            throw new Exception("认证失败。请检查仓库访问权限。");
+        } else {
+            throw new Exception("克隆仓库失败: " + httpsError);
+        }
+    }
+
+    /**
+     * 执行 git clone 命令
+     * 
+     * @param url 仓库 URL（HTTPS 或 SSH）
+     * @param targetDir 目标目录
+     * @return 如果成功返回 null，失败返回错误信息
+     */
+    private String executeGitClone(String url, String targetDir) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "git", "clone", "--depth", "1", url, targetDir
+            );
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+
+            int exitCode = process.waitFor();
+            return exitCode == 0 ? null : output.toString();
+        } catch (Exception e) {
+            return e.getMessage();
+        }
+    }
+
+    /**
+     * 将 HTTPS GitHub URL 转换为 SSH URL
+     * 
+     * @param httpsUrl HTTPS 格式的 URL
+     * @return SSH 格式的 URL，如果无法转换返回 null
+     */
+    private String convertToSshUrl(String httpsUrl) {
+        if (httpsUrl == null) {
+            return null;
+        }
+        // https://github.com/owner/repo -> git@github.com:owner/repo.git
+        if (httpsUrl.startsWith("https://github.com/")) {
+            String path = httpsUrl.substring("https://github.com/".length());
+            // 移除末尾的 / 和 .git
+            path = path.replaceAll("/+$", "").replaceAll("\\.git$", "");
+            return "git@github.com:" + path + ".git";
+        }
+        if (httpsUrl.startsWith("http://github.com/")) {
+            String path = httpsUrl.substring("http://github.com/".length());
+            path = path.replaceAll("/+$", "").replaceAll("\\.git$", "");
+            return "git@github.com:" + path + ".git";
+        }
+        return null;
     }
     
     /**
