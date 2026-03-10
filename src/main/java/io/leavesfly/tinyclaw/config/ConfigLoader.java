@@ -1,5 +1,6 @@
 package io.leavesfly.tinyclaw.config;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.cdimascio.dotenv.Dotenv;
@@ -44,7 +45,9 @@ import java.util.function.IntConsumer;
  */
 public class ConfigLoader {
     
-    private static final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private static final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     
     private static final String CONFIG_DIR = ".tinyclaw";      // 配置目录名
     private static final String CONFIG_FILE = "config.json";   // 配置文件名

@@ -10,26 +10,30 @@ import io.leavesfly.tinyclaw.bus.MessageBus;
 import io.leavesfly.tinyclaw.bus.OutboundMessage;
 import io.leavesfly.tinyclaw.config.ChannelsConfig;
 import io.leavesfly.tinyclaw.logger.TinyClawLogger;
+import io.leavesfly.tinyclaw.util.SSLUtils;
 import io.leavesfly.tinyclaw.util.StringUtils;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 飞书通道实现 - 基于飞书开放平台 HTTP API
+ * 飞书通道实现 - 基于飞书开放平台
  * 
  * 提供飞书/Lark 平台的消息处理能力，支持：
  * - HTTP API 发送消息
+ * - WebSocket 长连接接收消息（无需公网 IP）
  * - Webhook 接收消息（需配合外部 HTTP 服务）
  * 
  * 核心流程：
  * 1. 使用 App ID 和 App Secret 获取访问令牌
  * 2. 通过 API 发送消息
- * 3. 接收 Webhook 推送的消息事件
+ * 3. WebSocket 模式：建立长连接接收事件推送
+ * 4. Webhook 模式：接收外部 HTTP 服务推送的消息事件
  * 
  * 配置要求：
  * - App ID：飞书应用的 App ID
  * - App Secret：飞书应用的 App Secret
+ * - connectionMode：连接模式，"websocket"（默认）或 "webhook"
  */
 public class FeishuChannel extends BaseChannel {
     
@@ -45,6 +49,13 @@ public class FeishuChannel extends BaseChannel {
     // 访问令牌
     private String tenantAccessToken;
     private long tokenExpireTime;
+
+    
+    // WebSocket 连接
+    private WebSocket webSocket;
+    private Thread heartbeatThread;
+    private volatile boolean webSocketRunning;
+    private long pingInterval = 30000;
     
     /**
      * 创建飞书通道
@@ -59,6 +70,8 @@ public class FeishuChannel extends BaseChannel {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .sslSocketFactory(SSLUtils.getTrustAllSSLSocketFactory(), SSLUtils.getTrustAllManager())
+            .hostnameVerifier(SSLUtils.getTrustAllHostnameVerifier())
             .build();
     }
     
@@ -71,10 +84,39 @@ public class FeishuChannel extends BaseChannel {
             throw new Exception("飞书 App ID 或 App Secret 为空");
         }
         
-        // 获取访问令牌
-        refreshTenantAccessToken();
+        if (config.isWebSocketMode()) {
+            startWebSocketMode();
+        } else {
+            startWebhookMode();
+        }
         
         setRunning(true);
+    }
+    
+    /**
+     * 启动 WebSocket 模式
+     */
+    private void startWebSocketMode() throws Exception {
+        logger.info("飞书通道以 WebSocket 模式启动");
+        
+        refreshTenantAccessToken();
+        
+        String wsUrl = fetchWebSocketEndpoint();
+        connectWebSocket(wsUrl);
+        
+        startHeartbeat();
+        
+        logger.info("飞书通道已启动（WebSocket 模式）");
+    }
+    
+    /**
+     * 启动 Webhook 模式
+     */
+    private void startWebhookMode() throws Exception {
+        logger.info("飞书通道以 Webhook 模式启动");
+        
+        refreshTenantAccessToken();
+        
         logger.info("飞书通道已启动（HTTP API 模式）");
         logger.info("请配合 Webhook 服务使用以接收消息");
     }
@@ -83,7 +125,21 @@ public class FeishuChannel extends BaseChannel {
     public void stop() {
         logger.info("正在停止飞书通道...");
         setRunning(false);
+        
+        if (webSocket != null) {
+            webSocket.close(1000, "Shutdown");
+            webSocket = null;
+        }
+        
+        webSocketRunning = false;
+        
+        if (heartbeatThread != null) {
+            heartbeatThread.interrupt();
+            heartbeatThread = null;
+        }
+        
         tenantAccessToken = null;
+        
         logger.info("飞书通道已停止");
     }
     
@@ -154,11 +210,15 @@ public class FeishuChannel extends BaseChannel {
             .build();
         
         try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw new Exception("获取飞书访问令牌失败: HTTP " + response.code());
-            }
-            
             String responseBody = response.body() != null ? response.body().string() : "{}";
+            
+            if (!response.isSuccessful()) {
+                logger.error("获取飞书访问令牌失败", Map.of(
+                    "status", response.code(),
+                    "response", responseBody.length() > 500 ? responseBody.substring(0, 500) : responseBody
+                ));
+                throw new Exception("获取飞书访问令牌失败: HTTP " + response.code() + ", 响应: " + responseBody);
+            }
             JsonNode json = objectMapper.readTree(responseBody);
             
             int code = json.path("code").asInt(-1);
@@ -176,6 +236,178 @@ public class FeishuChannel extends BaseChannel {
             }
             
             logger.debug("飞书访问令牌已刷新", Map.of("expire", expire));
+        }
+    }
+    
+    /**
+     * 获取 WebSocket 端点
+     */
+    private String fetchWebSocketEndpoint() throws Exception {
+        String url = API_BASE_URL + "/callback/ws/endpoint";
+        
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("app_id", config.getAppId());
+        body.put("app_secret", config.getAppSecret());
+        String jsonBody = objectMapper.writeValueAsString(body);
+        
+        Request request = new Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer " + tenantAccessToken)
+            .header("Content-Type", "application/json")
+            .post(RequestBody.create(jsonBody, JSON_MEDIA_TYPE))
+            .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new Exception("获取飞书 WebSocket 端点失败: HTTP " + response.code());
+            }
+            
+            String responseBody = response.body() != null ? response.body().string() : "{}";
+            JsonNode json = objectMapper.readTree(responseBody);
+            
+            int code = json.path("code").asInt(-1);
+            if (code != 0) {
+                String msg = json.path("msg").asText("未知错误");
+                throw new Exception("获取飞书 WebSocket 端点失败: " + msg);
+            }
+            
+            JsonNode data = json.path("data");
+            String wsUrl = data.path("URL").asText(null);
+            
+            if (wsUrl == null) {
+                throw new Exception("获取飞书 WebSocket 端点失败: 响应中无 URL");
+            }
+            
+            // 解析客户端配置
+            JsonNode clientConfig = data.path("ClientConfig");
+            if (clientConfig.has("PingInterval")) {
+                pingInterval = clientConfig.get("PingInterval").asLong(30000);
+            }
+            
+            logger.debug("飞书 WebSocket 端点已获取", Map.of("url", wsUrl, "ping_interval", pingInterval));
+            return wsUrl;
+        }
+    }
+    
+    /**
+     * 连接 WebSocket
+     */
+    private void connectWebSocket(String wsUrl) {
+        webSocketRunning = true;
+        
+        Request request = new Request.Builder()
+            .url(wsUrl)
+            .build();
+        
+        WebSocketListener listener = new WebSocketListener() {
+            @Override
+            public void onOpen(WebSocket webSocket, Response response) {
+                logger.info("飞书 WebSocket 连接已建立");
+            }
+            
+            @Override
+            public void onMessage(WebSocket webSocket, String text) {
+                handleWebSocketMessage(text);
+            }
+            
+            @Override
+            public void onClosing(WebSocket webSocket, int code, String reason) {
+                logger.info("飞书 WebSocket 连接正在关闭", Map.of("code", String.valueOf(code), "reason", reason));
+            }
+            
+            @Override
+            public void onClosed(WebSocket webSocket, int code, String reason) {
+                logger.info("飞书 WebSocket 连接已关闭", Map.of("code", String.valueOf(code), "reason", reason));
+                webSocketRunning = false;
+            }
+            
+            @Override
+            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                logger.error("飞书 WebSocket 连接失败", Map.of("error", t.getMessage()));
+                webSocketRunning = false;
+                
+                if (isRunning()) {
+                    scheduleReconnect();
+                }
+            }
+        };
+        
+        webSocket = httpClient.newWebSocket(request, listener);
+    }
+    
+    /**
+     * 启动心跳线程
+     */
+    private void startHeartbeat() {
+        heartbeatThread = new Thread(() -> {
+            while (webSocketRunning && isRunning()) {
+                try {
+                    Thread.sleep(pingInterval);
+                    
+                    if (webSocketRunning && webSocket != null) {
+                        ObjectNode pingMessage = objectMapper.createObjectNode();
+                        pingMessage.put("type", "ping");
+                        webSocket.send(pingMessage.toString());
+                        logger.debug("已发送 WebSocket ping 心跳");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    logger.error("发送 WebSocket ping 心跳失败", Map.of("error", e.getMessage()));
+                }
+            }
+        });
+        
+        heartbeatThread.setDaemon(true);
+        heartbeatThread.setName("FeishuWebSocketHeartbeat");
+        heartbeatThread.start();
+    }
+    
+    /**
+     * 计划重连
+     */
+    private void scheduleReconnect() {
+        new Thread(() -> {
+            try {
+                Thread.sleep(5000);
+                
+                if (isRunning()) {
+                    logger.info("尝试重新连接飞书 WebSocket");
+                    
+                    try {
+                        refreshTenantAccessToken();
+                        String wsUrl = fetchWebSocketEndpoint();
+                        connectWebSocket(wsUrl);
+                        startHeartbeat();
+                    } catch (Exception e) {
+                        logger.error("重连飞书 WebSocket 失败", Map.of("error", e.getMessage()));
+                        scheduleReconnect();
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }).start();
+    }
+    
+    /**
+     * 处理 WebSocket 消息
+     */
+    private void handleWebSocketMessage(String text) {
+        try {
+            JsonNode json = objectMapper.readTree(text);
+            String type = json.path("type").asText("");
+            
+            if ("pong".equals(type)) {
+                return;
+            }
+            
+            if ("event".equals(type)) {
+                handleIncomingMessage(text);
+            }
+        } catch (Exception e) {
+            logger.error("处理 WebSocket 消息时出错", Map.of("error", e.getMessage()));
         }
     }
     
@@ -299,5 +531,4 @@ public class FeishuChannel extends BaseChannel {
             .replace("\r", "\\r")
             .replace("\t", "\\t");
     }
-    
 }

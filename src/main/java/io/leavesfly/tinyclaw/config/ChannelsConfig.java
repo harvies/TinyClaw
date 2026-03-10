@@ -198,11 +198,25 @@ public class ChannelsConfig {
         private String appSecret;
         private String encryptKey;
         private String verificationToken;
+        private String connectionMode;
         private List<String> allowFrom;
         
         public FeishuConfig() {
             this.enabled = false;
+            this.connectionMode = "websocket";
             this.allowFrom = new ArrayList<>();
+        }
+        
+        public String getConnectionMode() {
+            return connectionMode;
+        }
+        
+        public void setConnectionMode(String connectionMode) {
+            this.connectionMode = connectionMode;
+        }
+        
+        public boolean isWebSocketMode() {
+            return "websocket".equalsIgnoreCase(connectionMode);
         }
         
         public boolean isEnabled() {
@@ -259,11 +273,25 @@ public class ChannelsConfig {
         private String clientId;
         private String clientSecret;
         private String webhook;
+        private String connectionMode;
         private List<String> allowFrom;
         
         public DingTalkConfig() {
             this.enabled = false;
+            this.connectionMode = "stream";
             this.allowFrom = new ArrayList<>();
+        }
+        
+        public String getConnectionMode() {
+            return connectionMode;
+        }
+        
+        public void setConnectionMode(String connectionMode) {
+            this.connectionMode = connectionMode;
+        }
+        
+        public boolean isStreamMode() {
+            return "stream".equalsIgnoreCase(connectionMode);
         }
         
         public boolean isEnabled() {

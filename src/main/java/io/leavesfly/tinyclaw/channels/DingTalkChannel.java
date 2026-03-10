@@ -10,6 +10,7 @@ import io.leavesfly.tinyclaw.bus.MessageBus;
 import io.leavesfly.tinyclaw.bus.OutboundMessage;
 import io.leavesfly.tinyclaw.config.ChannelsConfig;
 import io.leavesfly.tinyclaw.logger.TinyClawLogger;
+import io.leavesfly.tinyclaw.util.SSLUtils;
 import io.leavesfly.tinyclaw.util.StringUtils;
 
 import javax.crypto.Mac;
@@ -20,27 +21,31 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 钉钉通道实现 - 基于钉钉机器人 Webhook API
+ * 钉钉通道实现 - 基于钉钉机器人 Webhook API 和 Stream 模式
  * 
  * 提供钉钉平台的消息发送能力，支持：
- * - Webhook 消息发送
+ * - Webhook 消息发送（被动接收模式）
+ * - Stream 模式（主动连接，无需公网 IP）
  * - 签名验证
  * - Markdown 格式消息
  * - session_webhook 回复机制
  * 
  * 核心流程：
  * 1. 使用 Client ID 和 Client Secret 配置
- * 2. 通过 Webhook 接收消息（需配合钉钉机器人配置）
- * 3. 解析消息内容并发布到消息总线
- * 4. 使用 session_webhook 发送回复
+ * 2. Webhook 模式：通过 Webhook 接收消息（需配合钉钉机器人配置）
+ * 3. Stream 模式：主动连接钉钉 Stream 服务，实时接收消息
+ * 4. 解析消息内容并发布到消息总线
+ * 5. 使用 session_webhook 发送回复
  * 
  * 配置要求：
  * - Client ID：钉钉应用的 Client ID
  * - Client Secret：钉钉应用的 Client Secret
- * - Webhook URL：机器人 Webhook 地址（可选）
+ * - Webhook URL：机器人 Webhook 地址（Webhook 模式可选）
+ * - Connection Mode：连接模式，"webhook" 或 "stream"（默认 "stream"）
  * 
  * 注意：
- * - 接收消息需要配置钉钉机器人的消息接收地址
+ * - Webhook 模式需要配置钉钉机器人的消息接收地址
+ * - Stream 模式无需公网 IP，主动连接钉钉服务器
  * - 发送消息使用 session_webhook 或配置的 Webhook
  */
 public class DingTalkChannel extends BaseChannel {
@@ -48,12 +53,18 @@ public class DingTalkChannel extends BaseChannel {
     private static final TinyClawLogger logger = TinyClawLogger.getLogger("dingtalk");
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
+    private static final String STREAM_CONNECTION_URL = "https://api.dingtalk.com/v1.0/gateway/connections/open";
+    private static final long RECONNECT_DELAY_SECONDS = 5;
     
     private final ChannelsConfig.DingTalkConfig config;
     private final OkHttpClient httpClient;
     
     // 存储 session_webhook 用于回复
     private final Map<String, String> sessionWebhooks = new ConcurrentHashMap<>();
+    
+    // Stream 模式相关
+    private WebSocket webSocket;
+    private volatile boolean streamModeRunning = false;
     
     /**
      * 创建钉钉通道
@@ -68,6 +79,8 @@ public class DingTalkChannel extends BaseChannel {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .sslSocketFactory(SSLUtils.getTrustAllSSLSocketFactory(), SSLUtils.getTrustAllManager())
+            .hostnameVerifier(SSLUtils.getTrustAllHostnameVerifier())
             .build();
     }
     
@@ -79,14 +92,234 @@ public class DingTalkChannel extends BaseChannel {
             throw new Exception("钉钉 Client ID 为空");
         }
         
+        if (config.getClientSecret() == null || config.getClientSecret().isEmpty()) {
+            throw new Exception("钉钉 Client Secret 为空");
+        }
+        
         setRunning(true);
-        logger.info("钉钉通道已启动（Webhook 模式）");
-        logger.info("请确保已配置钉钉机器人的消息接收地址");
+        
+        if (config.isStreamMode()) {
+            startStreamMode();
+            logger.info("钉钉通道已启动（Stream 模式）");
+        } else {
+            logger.info("钉钉通道已启动（Webhook 模式）");
+            logger.info("请确保已配置钉钉机器人的消息接收地址");
+        }
+    }
+    
+    /**
+     * 启动 Stream 模式
+     * 在守护线程中运行，避免阻塞主线程
+     */
+    private void startStreamMode() {
+        streamModeRunning = true;
+        Thread streamThread = new Thread(() -> {
+            while (isRunning() && streamModeRunning) {
+                try {
+                    connectStreamConnection();
+                    break;
+                } catch (Exception e) {
+                    logger.error("Stream 连接失败，将在 " + RECONNECT_DELAY_SECONDS + " 秒后重试", 
+                        Map.of("error", e.getMessage()));
+                    try {
+                        Thread.sleep(RECONNECT_DELAY_SECONDS * 1000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }, "DingTalkStreamThread");
+        streamThread.setDaemon(true);
+        streamThread.start();
+    }
+    
+    /**
+     * 注册 Stream 连接并建立 WebSocket 连接
+     */
+    private void connectStreamConnection() throws Exception {
+        StreamConnectionInfo connectionInfo = registerStreamConnection();
+        
+        String websocketUrl = connectionInfo.endpoint + "?ticket=" + connectionInfo.ticket;
+        logger.info("正在连接钉钉 Stream 服务", Map.of("url", websocketUrl));
+        
+        Request request = new Request.Builder()
+            .url(websocketUrl)
+            .build();
+        
+        WebSocketListener listener = new WebSocketListener() {
+            @Override
+            public void onOpen(WebSocket webSocket, Response response) {
+                logger.info("钉钉 Stream 连接已建立");
+            }
+            
+            @Override
+            public void onMessage(WebSocket webSocket, String text) {
+                handleStreamMessage(text);
+            }
+            
+            @Override
+            public void onClosing(WebSocket webSocket, int code, String reason) {
+                logger.info("钉钉 Stream 连接正在关闭", Map.of("code", String.valueOf(code), "reason", reason));
+            }
+            
+            @Override
+            public void onClosed(WebSocket webSocket, int code, String reason) {
+                logger.info("钉钉 Stream 连接已关闭", Map.of("code", String.valueOf(code), "reason", reason));
+                if (streamModeRunning && isRunning()) {
+                    scheduleReconnect();
+                }
+            }
+            
+            @Override
+            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                logger.error("钉钉 Stream 连接失败", Map.of("error", t.getMessage()));
+                if (streamModeRunning && isRunning()) {
+                    scheduleReconnect();
+                }
+            }
+        };
+        
+        webSocket = httpClient.newWebSocket(request, listener);
+    }
+    
+    /**
+     * 注册 Stream 连接，获取 WebSocket endpoint 和 ticket
+     */
+    private StreamConnectionInfo registerStreamConnection() throws Exception {
+        ObjectNode requestBody = objectMapper.createObjectNode();
+        requestBody.put("clientId", config.getClientId());
+        requestBody.put("clientSecret", config.getClientSecret());
+        
+        String jsonBody = objectMapper.writeValueAsString(requestBody);
+        
+        Request request = new Request.Builder()
+            .url(STREAM_CONNECTION_URL)
+            .post(RequestBody.create(jsonBody, JSON_MEDIA_TYPE))
+            .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new Exception("注册 Stream 连接失败: HTTP " + response.code());
+            }
+            
+            String responseBody = response.body() != null ? response.body().string() : "";
+            JsonNode responseJson = objectMapper.readTree(responseBody);
+            
+            String endpoint = responseJson.path("endpoint").asText(null);
+            String ticket = responseJson.path("ticket").asText(null);
+            
+            if (endpoint == null || endpoint.isEmpty()) {
+                throw new Exception("未获取到 endpoint");
+            }
+            if (ticket == null || ticket.isEmpty()) {
+                throw new Exception("未获取到 ticket");
+            }
+            
+            logger.info("Stream 连接注册成功", Map.of("endpoint", endpoint));
+            return new StreamConnectionInfo(endpoint, ticket);
+        }
+    }
+    
+    /**
+     * 处理 Stream 模式收到的消息
+     */
+    private void handleStreamMessage(String text) {
+        try {
+            JsonNode json = objectMapper.readTree(text);
+            
+            JsonNode headers = json.path("headers");
+            String topic = headers.path("topic").asText("");
+            String messageId = headers.path("messageId").asText("");
+            
+            // 处理心跳消息
+            if ("ping".equals(topic)) {
+                sendStreamAck(messageId, "pong");
+                return;
+            }
+            
+            // 处理机器人消息
+            if ("/v1.0/im/bot/messages/get".equals(topic)) {
+                String data = json.path("data").asText("");
+                if (data.isEmpty()) {
+                    logger.warn("收到空消息数据");
+                    return;
+                }
+                
+                // 调用原有的 handleIncomingMessage 处理消息
+                handleIncomingMessage(data);
+                
+                // 发送 ACK
+                sendStreamAck(messageId, "");
+            }
+            
+        } catch (Exception e) {
+            logger.error("处理 Stream 消息时出错", Map.of("error", e.getMessage()));
+        }
+    }
+    
+    /**
+     * 发送 Stream ACK 响应
+     */
+    private void sendStreamAck(String messageId, String data) {
+        if (webSocket == null || !isRunning()) {
+            return;
+        }
+        
+        try {
+            ObjectNode ack = objectMapper.createObjectNode();
+            ack.put("code", 200);
+            
+            ObjectNode ackHeaders = ack.putObject("headers");
+            ackHeaders.put("contentType", "application/json");
+            ackHeaders.put("messageId", messageId);
+            
+            ack.put("message", "OK");
+            ack.put("data", data);
+            
+            String ackJson = objectMapper.writeValueAsString(ack);
+            webSocket.send(ackJson);
+            
+        } catch (Exception e) {
+            logger.error("发送 Stream ACK 时出错", Map.of("error", e.getMessage()));
+        }
+    }
+    
+    /**
+     * 调度重连
+     */
+    private void scheduleReconnect() {
+        if (!streamModeRunning || !isRunning()) {
+            return;
+        }
+        
+        Thread reconnectThread = new Thread(() -> {
+            try {
+                Thread.sleep(RECONNECT_DELAY_SECONDS * 1000);
+                if (streamModeRunning && isRunning()) {
+                    connectStreamConnection();
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                logger.error("重连失败", Map.of("error", e.getMessage()));
+            }
+        }, "DingTalkReconnectThread");
+        reconnectThread.setDaemon(true);
+        reconnectThread.start();
     }
     
     @Override
     public void stop() {
         logger.info("正在停止钉钉通道...");
+        
+        streamModeRunning = false;
+        
+        if (webSocket != null) {
+            webSocket.close(1000, "Channel stopped");
+            webSocket = null;
+        }
+        
         setRunning(false);
         sessionWebhooks.clear();
         logger.info("钉钉通道已停止");
@@ -247,4 +480,16 @@ public class DingTalkChannel extends BaseChannel {
         return Base64.getEncoder().encodeToString(signData);
     }
     
+    /**
+     * Stream 连接信息
+     */
+    private static class StreamConnectionInfo {
+        final String endpoint;
+        final String ticket;
+        
+        StreamConnectionInfo(String endpoint, String ticket) {
+            this.endpoint = endpoint;
+            this.ticket = ticket;
+        }
+    }
 }
