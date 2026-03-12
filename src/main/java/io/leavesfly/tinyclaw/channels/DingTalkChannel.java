@@ -2,6 +2,7 @@ package io.leavesfly.tinyclaw.channels;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import okhttp3.*;
 
@@ -76,9 +77,10 @@ public class DingTalkChannel extends BaseChannel {
         super("dingtalk", bus, config.getAllowFrom());
         this.config = config;
         this.httpClient = new OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .pingInterval(30, TimeUnit.SECONDS)
             .sslSocketFactory(SSLUtils.getTrustAllSSLSocketFactory(), SSLUtils.getTrustAllManager())
             .hostnameVerifier(SSLUtils.getTrustAllHostnameVerifier())
             .build();
@@ -191,7 +193,19 @@ public class DingTalkChannel extends BaseChannel {
         requestBody.put("clientId", config.getClientId());
         requestBody.put("clientSecret", config.getClientSecret());
         
+        // 订阅机器人消息回调和事件推送
+        ArrayNode subscriptions = requestBody.putArray("subscriptions");
+        ObjectNode botCallback = subscriptions.addObject();
+        botCallback.put("type", "CALLBACK");
+        botCallback.put("topic", "/v1.0/im/bot/messages/get");
+        ObjectNode eventSubscription = subscriptions.addObject();
+        eventSubscription.put("type", "EVENT");
+        eventSubscription.put("topic", "*");
+        
+        requestBody.put("ua", "tinyclaw-sdk-java/1.0.0");
+        
         String jsonBody = objectMapper.writeValueAsString(requestBody);
+        logger.info("Stream 注册请求体", Map.of("body", jsonBody));
         
         Request request = new Request.Builder()
             .url(STREAM_CONNECTION_URL)
@@ -200,10 +214,13 @@ public class DingTalkChannel extends BaseChannel {
         
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
-                throw new Exception("注册 Stream 连接失败: HTTP " + response.code());
+                String errorBody = response.body() != null ? response.body().string() : "";
+                logger.error("注册 Stream 连接失败", Map.of("code", String.valueOf(response.code()), "body", errorBody));
+                throw new Exception("注册 Stream 连接失败: HTTP " + response.code() + " " + errorBody);
             }
             
             String responseBody = response.body() != null ? response.body().string() : "";
+            logger.info("Stream 注册响应", Map.of("body", responseBody));
             JsonNode responseJson = objectMapper.readTree(responseBody);
             
             String endpoint = responseJson.path("endpoint").asText(null);
@@ -232,9 +249,15 @@ public class DingTalkChannel extends BaseChannel {
             String topic = headers.path("topic").asText("");
             String messageId = headers.path("messageId").asText("");
             
+            logger.info("收到 Stream 消息", Map.of(
+                "topic", topic,
+                "messageId", messageId
+            ));
+            
             // 处理心跳消息
             if ("ping".equals(topic)) {
-                sendStreamAck(messageId, "pong");
+                String data = json.path("data").asText("{}");
+                sendStreamAck(messageId, data);
                 return;
             }
             
@@ -246,11 +269,18 @@ public class DingTalkChannel extends BaseChannel {
                     return;
                 }
                 
+                logger.info("收到机器人消息数据", Map.of(
+                    "data_length", data.length(),
+                    "data_preview", StringUtils.truncate(data, 200)
+                ));
+                
                 // 调用原有的 handleIncomingMessage 处理消息
                 handleIncomingMessage(data);
                 
                 // 发送 ACK
                 sendStreamAck(messageId, "");
+            } else {
+                logger.info("收到未处理的 Stream topic", Map.of("topic", topic));
             }
             
         } catch (Exception e) {

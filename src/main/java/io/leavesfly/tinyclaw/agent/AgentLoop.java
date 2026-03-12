@@ -234,6 +234,7 @@ public class AgentLoop {
 
     private String processUserMessage(InboundMessage msg) throws Exception {
         if (!providerConfigured) {
+            publishReplyIfNeeded(msg, PROVIDER_NOT_CONFIGURED_MSG);
             return PROVIDER_NOT_CONFIGURED_MSG;
         }
 
@@ -245,7 +246,20 @@ public class AgentLoop {
                 llmExecutor.execute(messages, sessionKey), DEFAULT_EMPTY_RESPONSE);
 
         persistAndSummarize(sessionKey, response);
+        publishReplyIfNeeded(msg, response);
         return response;
+    }
+
+    /**
+     * 将回复发布到出站队列，使 ChannelManager 能将消息路由到对应通道。
+     * 仅对来自外部通道的消息发布（跳过 CLI 直接调用）。
+     */
+    private void publishReplyIfNeeded(InboundMessage msg, String response) {
+        String channel = msg.getChannel();
+        if ("cli".equals(channel)) {
+            return;
+        }
+        bus.publishOutbound(new OutboundMessage(channel, msg.getChatId(), response));
     }
 
     // ==================== 系统消息处理 ====================
