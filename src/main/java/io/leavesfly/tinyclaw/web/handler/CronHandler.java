@@ -27,12 +27,18 @@ public class CronHandler {
     private final CronService cronService;
     private final SecurityMiddleware security;
 
+    /**
+     * 构造 CronHandler，注入全局配置、定时任务服务与安全中间件。
+     */
     public CronHandler(Config config, CronService cronService, SecurityMiddleware security) {
         this.config = config;
         this.cronService = cronService;
         this.security = security;
     }
 
+    /**
+     * 入口路由：预检通过后，按路径分发列表、创建、删除或启停操作。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();
@@ -79,6 +85,9 @@ public class CronHandler {
         }
     }
 
+    /**
+     * 返回所有定时任务列表，包含 id、name、启用状态、计划表达式及下次运行时间。
+     */
     private void handleListCron(HttpExchange exchange, String corsOrigin) throws IOException {
         List<CronJob> jobs = cronService.listJobs(true);
         ArrayNode result = WebUtils.MAPPER.createArrayNode();
@@ -101,6 +110,10 @@ public class CronHandler {
         WebUtils.sendJson(exchange, 200, result, corsOrigin);
     }
 
+    /**
+     * 解析请求体并创建新定时任务，支持 cron 表达式与固定间隔两种方式。
+     * 缺少 schedule 字段时返回 400。
+     */
     private void handleCreateCron(HttpExchange exchange, String corsOrigin) throws IOException {
         String body = WebUtils.readRequestBodyLimited(exchange);
         JsonNode json = WebUtils.MAPPER.readTree(body);

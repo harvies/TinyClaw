@@ -24,12 +24,19 @@ public class ModelsHandler {
     private final SecurityMiddleware security;
     private final ProvidersHandler providersHandler;
 
+    /**
+     * 构造 ModelsHandler，注入全局配置、安全中间件及 ProvidersHandler（用于校验 Provider 是否已授权）。
+     */
     public ModelsHandler(Config config, SecurityMiddleware security, ProvidersHandler providersHandler) {
         this.config = config;
         this.security = security;
         this.providersHandler = providersHandler;
     }
 
+    /**
+     * 入口路由：预检通过后，返回所有模型定义列表。
+     * 每个模型节点会一并附带 authorized 字段，表明对应 Provider 是否已配置 API Key。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();

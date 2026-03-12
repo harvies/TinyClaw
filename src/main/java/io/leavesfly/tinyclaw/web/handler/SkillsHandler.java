@@ -27,12 +27,19 @@ public class SkillsHandler {
     private final SkillsLoader skillsLoader;
     private final SecurityMiddleware security;
 
+    /**
+     * 构造 SkillsHandler，注入全局配置、技能加载器与安全中间件。
+     */
     public SkillsHandler(Config config, SkillsLoader skillsLoader, SecurityMiddleware security) {
         this.config = config;
         this.skillsLoader = skillsLoader;
         this.security = security;
     }
 
+    /**
+     * 入口路由：预检通过后，按路径分发列表或内容读取。
+     * 技能名使用 URL 解码处理。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();

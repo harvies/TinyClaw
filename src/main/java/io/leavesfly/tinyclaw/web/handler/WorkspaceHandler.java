@@ -27,11 +27,17 @@ public class WorkspaceHandler {
     private final Config config;
     private final SecurityMiddleware security;
 
+    /**
+     * 构造 WorkspaceHandler，注入全局配置与安全中间件。
+     */
     public WorkspaceHandler(Config config, SecurityMiddleware security) {
         this.config = config;
         this.security = security;
     }
 
+    /**
+     * 入口路由：预检通过后，按路径分发文件列表、读取或保存操作。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();
@@ -57,6 +63,10 @@ public class WorkspaceHandler {
         }
     }
 
+    /**
+     * 返回工作空间中预定义的文件列表以及 memory 文件（如果存在）。
+     * 不存在的文件不包含在结果中。
+     */
     private void handleListWorkspaceFiles(HttpExchange exchange, String workspace,
                                           String corsOrigin) throws IOException {
         ArrayNode files = WebUtils.MAPPER.createArrayNode();
@@ -70,6 +80,10 @@ public class WorkspaceHandler {
         WebUtils.sendJson(exchange, 200, files, corsOrigin);
     }
 
+    /**
+     * 构建包含 name、exists、size、lastModified 的文件信息节点。
+     * 读取属性失败时以 0 填充。
+     */
     private ObjectNode createFileInfo(String fileName, Path filePath) {
         ObjectNode file = WebUtils.MAPPER.createObjectNode();
         file.put("name", fileName);
@@ -84,6 +98,9 @@ public class WorkspaceHandler {
         return file;
     }
 
+    /**
+     * 检测并将 memory 子目录下的文件（如果存在）追加到文件列表。
+     */
     private void addMemoryFile(ArrayNode files, String workspace) {
         Path memoryFile = Paths.get(workspace, WebUtils.MEMORY_SUBDIR, WebUtils.MEMORY_FILE);
         if (Files.exists(memoryFile)) {
@@ -92,6 +109,10 @@ public class WorkspaceHandler {
         }
     }
 
+    /**
+     * 读取工作空间中指定文件的内容，文件名使用 URL 解码处理。
+     * 文件不存在时返回 404。
+     */
     private void handleGetWorkspaceFile(HttpExchange exchange, String path, String workspace,
                                         String corsOrigin) throws IOException {
         String fileName = URLDecoder.decode(
@@ -108,6 +129,10 @@ public class WorkspaceHandler {
         }
     }
 
+    /**
+     * 将请求体中的 content 写入工作空间中的指定文件，必要时自动创建父目录。
+     * 文件名使用 URL 解码处理。
+     */
     private void handleSaveWorkspaceFile(HttpExchange exchange, String path, String workspace,
                                          String corsOrigin) throws IOException {
         String fileName = URLDecoder.decode(

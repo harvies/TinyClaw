@@ -23,12 +23,24 @@ public class ConfigHandler {
     private final SecurityMiddleware security;
     private final ProvidersHandler providersHandler;
 
+    /**
+     * 构造 ConfigHandler，注入全局配置、安全中间件以及 ProvidersHandler（用于分析当前 Provider）。
+     */
     public ConfigHandler(Config config, SecurityMiddleware security, ProvidersHandler providersHandler) {
         this.config = config;
         this.security = security;
         this.providersHandler = providersHandler;
     }
 
+    /**
+     * 入口路由：预检通过后，按路径分发到以下四种操作：
+     * <ul>
+     *   <li>GET  /api/config/model   —— 读取当前模型与 Provider</li>
+     *   <li>PUT  /api/config/model   —— 更新模型与 Provider 并持久化</li>
+     *   <li>GET  /api/config/agent   —— 读取 Agent 全量配置项</li>
+     *   <li>PUT  /api/config/agent   —— 更新 Agent 配置并持久化</li>
+     * </ul>
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();

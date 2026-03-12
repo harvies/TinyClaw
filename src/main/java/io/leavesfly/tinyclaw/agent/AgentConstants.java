@@ -27,7 +27,7 @@ public final class AgentConstants {
     /**
      * 记忆上下文的 token 预算（占上下文窗口的百分比）
      */
-    public static final int MEMORY_TOKEN_BUDGET_PERCENTAGE = 15;
+    public static final int MEMORY_TOKEN_BUDGET_PERCENTAGE = 30;
     /**
      * 记忆上下文的最小 token 预算
      */

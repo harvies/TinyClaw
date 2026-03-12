@@ -23,11 +23,17 @@ public class ChannelsHandler {
     private final Config config;
     private final SecurityMiddleware security;
 
+    /**
+     * 构造 ChannelsHandler，注入全局配置与安全中间件。
+     */
     public ChannelsHandler(Config config, SecurityMiddleware security) {
         this.config = config;
         this.security = security;
     }
 
+    /**
+     * 入口路由：预检通过后，按路径分发列表、详情查询或更新操作。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();
@@ -52,6 +58,9 @@ public class ChannelsHandler {
         }
     }
 
+    /**
+     * 返回所有通道的名称及启用状态列表。
+     */
     private void handleGetChannels(HttpExchange exchange, String corsOrigin) throws IOException {
         ArrayNode channels = WebUtils.MAPPER.createArrayNode();
         ChannelsConfig cc = config.getChannels();
@@ -65,6 +74,10 @@ public class ChannelsHandler {
         WebUtils.sendJson(exchange, 200, channels, corsOrigin);
     }
 
+    /**
+     * 返回指定通道的详细配置（密阥字段自动脲码）。
+     * 通道不存在时返回 404。
+     */
     private void handleGetChannelDetail(HttpExchange exchange, String path, String corsOrigin) throws IOException {
         String channelName = path.substring(WebUtils.API_CHANNELS.length() + 1);
         ObjectNode detail = getChannelDetail(channelName);
@@ -75,6 +88,10 @@ public class ChannelsHandler {
         }
     }
 
+    /**
+     * 更新指定通道的配置并持久化。
+     * 更新失败时返回 400。
+     */
     private void handleUpdateChannel(HttpExchange exchange, String path, String corsOrigin) throws IOException {
         String channelName = path.substring(WebUtils.API_CHANNELS.length() + 1);
         String body = WebUtils.readRequestBodyLimited(exchange);
@@ -88,6 +105,9 @@ public class ChannelsHandler {
         }
     }
 
+    /**
+     * 向 channels 数组追加一个包含 name 与 enabled 字段的节点。
+     */
     private void addChannelInfo(ArrayNode channels, String name, boolean enabled) {
         ObjectNode channel = WebUtils.MAPPER.createObjectNode();
         channel.put("name", name);
@@ -95,6 +115,10 @@ public class ChannelsHandler {
         channels.add(channel);
     }
 
+    /**
+     * 根据通道名获取详情节点（密阥字段自动脲码）。
+     * 不支持的通道名返回 null。
+     */
     private ObjectNode getChannelDetail(String name) {
         ObjectNode detail = WebUtils.MAPPER.createObjectNode();
         detail.put("name", name);
@@ -150,6 +174,10 @@ public class ChannelsHandler {
         };
     }
 
+    /**
+     * 根据通道名将请求中的字段写入对应的配置对象。
+     * 不支持的通道名返回 false。
+     */
     private boolean updateChannelConfig(String name, JsonNode json) {
         ChannelsConfig cc = config.getChannels();
         return switch (name) {
@@ -162,18 +190,21 @@ public class ChannelsHandler {
         };
     }
 
+    /** 更新 Telegram 配置：enabled 及 Token（已脲码时跳过）。 */
     private void updateTelegramConfig(ChannelsConfig cc, JsonNode json) {
         if (json.has("enabled")) cc.getTelegram().setEnabled(json.get("enabled").asBoolean());
         if (json.has("token") && !WebUtils.isSecretMasked(json.get("token").asText()))
             cc.getTelegram().setToken(json.get("token").asText());
     }
 
+    /** 更新 Discord 配置：enabled 及 Token（已脲码时跳过）。 */
     private void updateDiscordConfig(ChannelsConfig cc, JsonNode json) {
         if (json.has("enabled")) cc.getDiscord().setEnabled(json.get("enabled").asBoolean());
         if (json.has("token") && !WebUtils.isSecretMasked(json.get("token").asText()))
             cc.getDiscord().setToken(json.get("token").asText());
     }
 
+    /** 更新飞书配置：enabled、appId 及 appSecret（已脲码时跳过）。 */
     private void updateFeishuConfig(ChannelsConfig cc, JsonNode json) {
         if (json.has("enabled")) cc.getFeishu().setEnabled(json.get("enabled").asBoolean());
         if (json.has("appId"))   cc.getFeishu().setAppId(json.get("appId").asText());
@@ -181,6 +212,7 @@ public class ChannelsHandler {
             cc.getFeishu().setAppSecret(json.get("appSecret").asText());
     }
 
+    /** 更新钉钉配置：enabled、clientId 及 clientSecret（已脲码时跳过）。 */
     private void updateDingtalkConfig(ChannelsConfig cc, JsonNode json) {
         if (json.has("enabled"))    cc.getDingtalk().setEnabled(json.get("enabled").asBoolean());
         if (json.has("clientId"))   cc.getDingtalk().setClientId(json.get("clientId").asText());
@@ -188,6 +220,7 @@ public class ChannelsHandler {
             cc.getDingtalk().setClientSecret(json.get("clientSecret").asText());
     }
 
+    /** 更新 QQ 配置：enabled、appId 及 appSecret（已脲码时跳过）。 */
     private void updateQQConfig(ChannelsConfig cc, JsonNode json) {
         if (json.has("enabled"))   cc.getQq().setEnabled(json.get("enabled").asBoolean());
         if (json.has("appId"))     cc.getQq().setAppId(json.get("appId").asText());

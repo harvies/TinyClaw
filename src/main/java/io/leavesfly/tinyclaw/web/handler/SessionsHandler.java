@@ -25,12 +25,19 @@ public class SessionsHandler {
     private final SessionManager sessionManager;
     private final SecurityMiddleware security;
 
+    /**
+     * 构造 SessionsHandler，注入全局配置、会话管理器与安全中间件。
+     */
     public SessionsHandler(Config config, SessionManager sessionManager, SecurityMiddleware security) {
         this.config = config;
         this.sessionManager = sessionManager;
         this.security = security;
     }
 
+    /**
+     * 入口路由：预检通过后，按路径分发列表查询、历史记录获取或删除操作。
+     * 路径中的 sessionKey 使用 URL 解码处理。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();

@@ -24,11 +24,18 @@ public class AuthHandler {
     private final Config config;
     private final SecurityMiddleware security;
 
+    /**
+     * 构造 AuthHandler，注入全局配置与安全中间件。
+     */
     public AuthHandler(Config config, SecurityMiddleware security) {
         this.config = config;
         this.security = security;
     }
 
+    /**
+     * 入口路由：处理 CORS 预检后，按请求路径分发到
+     * {@link #handleAuthCheck} 或 {@link #handleAuthLogin}。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         try {
             // Auth 端点只做 CORS 预检，不强制认证
@@ -52,6 +59,10 @@ public class AuthHandler {
         }
     }
 
+    /**
+     * 检查当前请求是否已通过认证。
+     * 若认证未启用，直接返回 authenticated=true；否则委托 SecurityMiddleware 校验 Token。
+     */
     private void handleAuthCheck(HttpExchange exchange, String corsOrigin) throws IOException {
         GatewayConfig gatewayConfig = config.getGateway();
         if (!gatewayConfig.isAuthEnabled()) {
@@ -70,6 +81,10 @@ public class AuthHandler {
         }
     }
 
+    /**
+     * 处理登录请求：解析 username/password，匹配成功后返回 Base64 编码的 Token。
+     * 认证未启用时直接返回成功。
+     */
     private void handleAuthLogin(HttpExchange exchange, String corsOrigin) throws IOException {
         GatewayConfig gatewayConfig = config.getGateway();
         if (!gatewayConfig.isAuthEnabled()) {

@@ -13,6 +13,9 @@ import java.io.OutputStream;
  */
 public class StaticHandler {
 
+    /**
+     * 入口路由：对请求路径正规化并进行路径穿越防护处理，然后从 classpath 提供静态资源。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
         path = normalizeStaticPath(path);
@@ -25,6 +28,9 @@ public class StaticHandler {
         serveStaticResource(exchange, path);
     }
 
+    /**
+     * 将根路径 "/" 或空路径转换为 "index.html"，其他路径就射1不变。
+     */
     private String normalizeStaticPath(String path) {
         if (WebUtils.PATH_ROOT.equals(path) || path.isEmpty()) {
             return WebUtils.PATH_INDEX;
@@ -32,10 +38,16 @@ public class StaticHandler {
         return path;
     }
 
+    /**
+     * 检测路径是否包含 ".." 等路径穿越尝试。
+     */
     private boolean isPathTraversalAttempt(String path) {
         return path.contains(WebUtils.PATH_PARENT);
     }
 
+    /**
+     * 从 classpath 的 web/ 目录加载对应资源，资源不存在时返回 404。
+     */
     private void serveStaticResource(HttpExchange exchange, String path) throws IOException {
         String resourcePath = WebUtils.RESOURCE_PREFIX + path;
         try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
@@ -47,6 +59,9 @@ public class StaticHandler {
         }
     }
 
+    /**
+     * 读取资源内容，依据文件后缀设置 Content-Type 并写入响应。
+     */
     private void sendStaticFile(HttpExchange exchange, InputStream is, String path) throws IOException {
         byte[] content = is.readAllBytes();
         String contentType = WebUtils.getContentType(path);

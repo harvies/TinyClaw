@@ -24,11 +24,17 @@ public class ProvidersHandler {
     private final Config config;
     private final SecurityMiddleware security;
 
+    /**
+     * 构造 ProvidersHandler，注入全局配置与安全中间件。
+     */
     public ProvidersHandler(Config config, SecurityMiddleware security) {
         this.config = config;
         this.security = security;
     }
 
+    /**
+     * 入口路由：预检通过后，按路径分发列表查询或更新操作。
+     */
     public void handle(HttpExchange exchange) throws IOException {
         if (!security.preCheck(exchange)) return;
         String path = exchange.getRequestURI().getPath();
@@ -69,6 +75,9 @@ public class ProvidersHandler {
         }
     }
 
+    /**
+     * 向 providers 数组追加一个描述单个 Provider 的节点，包含 name、apiBase、脲码的 apiKey 以及 authorized 字段。
+     */
     private void addProviderInfo(ArrayNode providers, String name, ProvidersConfig.ProviderConfig pc) {
         ObjectNode provider = WebUtils.MAPPER.createObjectNode();
         provider.put("name", name);
@@ -79,6 +88,11 @@ public class ProvidersHandler {
         providers.add(provider);
     }
 
+    /**
+     * 将请求中的 apiKey/apiBase 写入对应 Provider 配置。
+     * 已脲码的 apiKey 不会覆盖原有值。
+     * Provider 不存在时返回 false。
+     */
     private boolean updateProviderConfig(String name, JsonNode json) {
         ProvidersConfig.ProviderConfig provider = getProviderByName(name);
         if (provider == null) return false;
@@ -121,6 +135,9 @@ public class ProvidersHandler {
         return "";
     }
 
+    /**
+     * 判断 Provider 配置是否有效（非 null 且通过 isValid 校验）。
+     */
     private boolean isValidProvider(ProvidersConfig.ProviderConfig provider) {
         return provider != null && provider.isValid();
     }
